@@ -25,9 +25,10 @@ import random
 from collections import defaultdict
 from typing import Any, Callable, Optional
 import numpy as np
+
 from logparser.LogGzip.compressors import DefaultCompressor
 from tqdm import tqdm
-from .utils import *
+from logparser.LogGzip.utils import *
 from sklearn.neighbors import NearestNeighbors
 from sklearn.cluster import DBSCAN
 
@@ -36,14 +37,49 @@ RESET = "\033[0m"
 PINK = "\033[38;2;255;192;203m"
 
 
+def NCD(c1: float, c2: float, c12: float) -> float:
+    """
+    Calculates Normalized Compression Distance (NCD).
+
+    Arguments:
+        c1 (float): The compressed length of the first object.
+        c2 (float): The compressed length of the second object.
+        c12 (float): The compressed length of the concatenation of the first
+                     and second objects.
+
+    Returns:
+        float: The Normalized Compression Distance c1 and c2.
+
+    Formula:
+        NCD(c1, c2, c12) = (c12 - min(c1, c2)) / max(c1, c2)
+    """
+
+    distance = (c12 - min(c1, c2)) / max(c1, c2)
+    return distance
+
+
+def agg_by_concat_space(t1: str, t2: str) -> str:
+    """
+    Combines `t1` and `t2` with a space.
+
+    Arguments:
+        t1 (str): First item.
+        t2 (str): Second item.
+
+    Returns:
+        str: `{t1} {t2}`
+    """
+
+    return t1 + " " + t2
+
 class LogParser:
     def __init__(
         self,
         logname,
         log_format,
         compressor: DefaultCompressor,
-        aggregation_function: Callable,
-        distance_function: Callable,
+        agg_by_concat_space=agg_by_concat_space,
+        NCD=NCD,
         indir="./",
         outdir="./result/",
         threshold=2,
@@ -56,12 +92,13 @@ class LogParser:
         self.rex = rex
         self.df_log = None
         self.logname = logname
-        self.aggregation_func = aggregation_function
+        self.agg_by_concat_space = agg_by_concat_space
+        self.NCD=NCD
         self.compressor = compressor
-        self.distance_func = distance_function
         self.distance_matrix: list = []
         self.threshold = threshold
         self.delimeter = delimeter
+
 
     def parse(self, logName):
         print("Parsing file: " + os.path.join(self.path, logName))
@@ -152,55 +189,7 @@ class LogParser:
             columns=["EventId", "EventTemplate", "Occurrences"],
         )
 
-    #这是一个预处理方法，接收一个参数line。方法通过遍历self.rex并对line进行预处理，将每个找到的模式替换为"<*>"。处理完成后的line作为结果返回。
-    def preprocess(self, line):
-        for currentRex in self.rex:
-            line = re.sub(currentRex, "<*>", line)
-        return line
 
-    #使用generate_logformat_regex方法生成用于分析日志文件的正则表达式regex和标签列表headers。
-    # 然后，它使用log_to_dataframe方法将日志文件转换成一个pandas的DataFrame。
-    def load_data(self):
-        headers, regex = self.generate_logformat_regex(self.logformat)
-        self.df_log = self.log_to_dataframe(
-            os.path.join(self.path, self.logName), regex, headers, self.logformat
-        )
-
-    #接收一个logformat（日志格式）作为参数，返回一个用于分割日志信息的正则表达式以及相应的标题列表。函数通过拆分logformat参数并构建正则表达式模式完成此任务。
-    def generate_logformat_regex(self, logformat):
-        """Function to generate regular expression to split log messages"""
-        headers = []
-        splitters = re.split(r"(<[^<>]+>)", logformat)
-        regex = ""
-        for k in range(len(splitters)):
-            if k % 2 == 0:
-                splitter = re.sub(" +", "\\\s+", splitters[k])
-                regex += splitter
-            else:
-                header = splitters[k].strip("<").strip(">")
-                regex += "(?P<%s>.*?)" % header
-                headers.append(header)
-        regex = re.compile("^" + regex + "$")
-        return headers, regex
-
-    #通用模块
-    def log_to_dataframe(self, log_file, regex, headers, logformat):
-        """Function to transform log file to dataframe"""
-        log_messages = []
-        linecount = 0
-        with open(log_file, "r") as fin:
-            for line in fin.readlines():
-                try:
-                    match = regex.search(line.strip())
-                    message = [match.group(header) for header in headers]
-                    log_messages.append(message)
-                    linecount += 1
-                except Exception as e:
-                    pass
-        logdf = pd.DataFrame(log_messages, columns=headers)
-        logdf.insert(0, "LineId", None)
-        logdf["LineId"] = [i + 1 for i in range(linecount)]
-        return logdf
 
     def calc_dis(
             self, data: list, fast: bool = False
@@ -225,11 +214,11 @@ class LogParser:
             for j, t2 in enumerate(data):
                 if fast:
                     t2_compressed = self.compressor.get_compressed_len_fast(t2)
-                    t1t2_compressed = self.compressor.get_compressed_len_fast(self.aggregation_func(t1, t2))
+                    t1t2_compressed = self.compressor.get_compressed_len_fast(self.agg_by_concat_space(t1, t2))
                 else:
                     t2_compressed = self.compressor.get_compressed_len(t2)
-                    t1t2_compressed = self.compressor.get_compressed_len(self.aggregation_func(t1, t2))
-                distance = self.distance_func(
+                    t1t2_compressed = self.compressor.get_compressed_len(self.agg_by_concat_space(t1, t2))
+                distance = self.NCD(
                     t1_compressed, t2_compressed, t1t2_compressed
                 )
                 distance4i.append(distance)
@@ -279,29 +268,78 @@ class LogParser:
     #             distance4i.append(distance)
     #         self.distance_matrix.append(distance4i)
 
+#这是一个预处理方法，接收一个参数line。方法通过遍历self.rex并对line进行预处理，将每个找到的模式替换为"<*>"。处理完成后的line作为结果返回。
+    def preprocess(self, line):
+        for currentRex in self.rex:
+            line = re.sub(currentRex, "<*>", line)
+        return line
 
-def output_result(parse_result):
-    template_set = {}
-    for key in parse_result.keys():
-        for pr in parse_result[key]:
-            sort = sorted(pr, key=lambda tup: tup[2])
-            i = 1
-            template = []
-            while i < len(sort):
-                this = sort[i][1]
-                if bool("<*>" in this):
-                    template.append("<*>")
-                    i += 1
-                    continue
-                if exclude_digits(this):
-                    template.append("<*>")
-                    i += 1
-                    continue
-                template.append(sort[i][1])
-                i += 1
-            template = tuple(template)
-            template_set.setdefault(template, []).append(pr[len(pr) - 1][0])
-    return template_set
+    #使用generate_logformat_regex方法生成用于分析日志文件的正则表达式regex和标签列表headers。
+    # 然后，它使用log_to_dataframe方法将日志文件转换成一个pandas的DataFrame。
+    def load_data(self):
+        headers, regex = self.generate_logformat_regex(self.logformat)
+        self.df_log = self.log_to_dataframe(
+            os.path.join(self.path, self.logName), regex, headers, self.logformat
+        )
+
+    #接收一个logformat（日志格式）作为参数，返回一个用于分割日志信息的正则表达式以及相应的标题列表。函数通过拆分logformat参数并构建正则表达式模式完成此任务。
+    def generate_logformat_regex(self, logformat):
+        """Function to generate regular expression to split log messages"""
+        headers = []
+        splitters = re.split(r"(<[^<>]+>)", logformat)
+        regex = ""
+        for k in range(len(splitters)):
+            if k % 2 == 0:
+                splitter = re.sub(" +", "\\\s+", splitters[k])
+                regex += splitter
+            else:
+                header = splitters[k].strip("<").strip(">")
+                regex += "(?P<%s>.*?)" % header
+                headers.append(header)
+        regex = re.compile("^" + regex + "$")
+        return headers, regex
+
+    #通用模块
+    def log_to_dataframe(self, log_file, regex, headers, logformat):
+        """Function to transform log file to dataframe"""
+        log_messages = []
+        linecount = 0
+        with open(log_file, "r") as fin:
+            for line in fin.readlines():
+                try:
+                    match = regex.search(line.strip())
+                    message = [match.group(header) for header in headers]
+                    log_messages.append(message)
+                    linecount += 1
+                except Exception as e:
+                    pass
+        logdf = pd.DataFrame(log_messages, columns=headers)
+        logdf.insert(0, "LineId", None)
+        logdf["LineId"] = [i + 1 for i in range(linecount)]
+        return logdf
+
+# def output_result(parse_result):
+#     template_set = {}
+#     for key in parse_result.keys():
+#         for pr in parse_result[key]:
+#             sort = sorted(pr, key=lambda tup: tup[2])
+#             i = 1
+#             template = []
+#             while i < len(sort):
+#                 this = sort[i][1]
+#                 if bool("<*>" in this):
+#                     template.append("<*>")
+#                     i += 1
+#                     continue
+#                 if exclude_digits(this):
+#                     template.append("<*>")
+#                     i += 1
+#                     continue
+#                 template.append(sort[i][1])
+#                 i += 1
+#             template = tuple(template)
+#             template_set.setdefault(template, []).append(pr[len(pr) - 1][0])
+#     return template_set
 
 
 def save_result(dataset, df_output, template_set):
@@ -325,56 +363,4 @@ def save_result(dataset, df_output, template_set):
 #     return len(digits) / len(string) >= 0.3
 
 
-# class format_log:  # this part of code is from LogPai https://github.com/LogPai
-#     def __init__(self, log_format, indir="./"):
-#         self.path = indir
-#         self.logName = None
-#         self.df_log = None
-#         self.log_format = log_format
-#
-#     def format(self, logName):
-#         self.logName = logName
-#
-#         self.load_data()
-#
-#         return self.df_log
 
-    # def generate_logformat_regex(self, logformat):
-    #     """Function to generate regular expression to split log messages"""
-    #     headers = []
-    #     splitters = re.split(r"(<[^<>]+>)", logformat)
-    #     regex = ""
-    #     for k in range(len(splitters)):
-    #         if k % 2 == 0:
-    #             splitter = re.sub(" +", "\\\s+", splitters[k])
-    #             regex += splitter
-    #         else:
-    #             header = splitters[k].strip("<").strip(">")
-    #             regex += "(?P<%s>.*?)" % header
-    #             headers.append(header)
-    #     regex = re.compile("^" + regex + "$")
-    #     return headers, regex
-    #
-    # def log_to_dataframe(self, log_file, regex, headers, logformat):
-    #     """Function to transform log file to dataframe"""
-    #     log_messages = []
-    #     linecount = 0
-    #     with open(log_file, "r", encoding="UTF-8") as fin:
-    #         for line in fin.readlines():
-    #             try:
-    #                 match = regex.search(line.strip())
-    #                 message = [match.group(header) for header in headers]
-    #                 log_messages.append(message)
-    #                 linecount += 1
-    #             except Exception as e:
-    #                 print("[Warning] Skip line: " + line)
-    #     logdf = pd.DataFrame(log_messages, columns=headers)
-    #     logdf.insert(0, "LineId", None)
-    #     logdf["LineId"] = [i + 1 for i in range(linecount)]
-    #     return logdf
-    #
-    # def load_data(self):
-    #     headers, regex = self.generate_logformat_regex(self.log_format)
-    #     self.df_log = self.log_to_dataframe(
-    #         os.path.join(self.path, self.logName), regex, headers, self.log_format
-    #     )

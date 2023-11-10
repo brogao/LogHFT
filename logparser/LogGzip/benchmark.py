@@ -154,6 +154,8 @@ benchmark_settings = {
 
 benchmark_result = []
 
+
+
 for dataset, setting in benchmark_settings.items():
     print("\n=== Evaluation on %s ===" % dataset)
     indir = os.path.join(input_dir, os.path.dirname(setting["log_file"]))
@@ -166,7 +168,7 @@ for dataset, setting in benchmark_settings.items():
         rex=setting["regex"],
         delimeter=setting["delimiter"],
         logname=dataset,
-        # aggregation_function=aggregation_func,
+        # aggregation_func=aggregation_function,
         # distance_func=distance_function,
 
         compressor=compressor
