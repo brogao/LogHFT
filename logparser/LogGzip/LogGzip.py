@@ -109,17 +109,7 @@ class LogParser:
 
         sentences = self.df_log["Content"].tolist()
 
-        # group_len, tuple_vector, frequency_vector = self.get_frequecy_vector(
-        #     sentences, self.rex, self.delimeter, self.logname
-        # )
-        #
-        # (
-        #     sorted_tuple_vector,
-        #     word_combinations,
-        #     word_combinations_reverse,
-        # ) = self.tuple_generate(group_len, tuple_vector, frequency_vector)
 
-        # Now, calculate the distance matrix for these sentences.
         distance_matrix = self.calc_dis(sentences)
 
         # Use KNN for classification
