@@ -38,37 +38,12 @@ PINK = "\033[38;2;255;192;203m"
 
 
 def NCD(c1: float, c2: float, c12: float) -> float:
-    """
-    Calculates Normalized Compression Distance (NCD).
-
-    Arguments:
-        c1 (float): The compressed length of the first object.
-        c2 (float): The compressed length of the second object.
-        c12 (float): The compressed length of the concatenation of the first
-                     and second objects.
-
-    Returns:
-        float: The Normalized Compression Distance c1 and c2.
-
-    Formula:
-        NCD(c1, c2, c12) = (c12 - min(c1, c2)) / max(c1, c2)
-    """
 
     distance = (c12 - min(c1, c2)) / max(c1, c2)
     return distance
 
 
 def agg_by_concat_space(t1: str, t2: str) -> str:
-    """
-    Combines `t1` and `t2` with a space.
-
-    Arguments:
-        t1 (str): First item.
-        t2 (str): Second item.
-
-    Returns:
-        str: `{t1} {t2}`
-    """
 
     return t1 + " " + t2
 
@@ -96,7 +71,6 @@ class LogParser:
         self.NCD=NCD
         self.compressor = compressor
         self.distance_matrix: list = []
-        self.threshold = threshold
         self.delimeter = delimeter
 
 
@@ -111,36 +85,21 @@ class LogParser:
 
 
         distance_matrix = self.calc_dis(sentences)
+        distance_matrix_array = np.array(distance_matrix)
 
         # Use KNN for classification
         neigh = NearestNeighbors(n_neighbors=3)  # Change the number of neighbors according to your need
-        neigh.fit(distance_matrix)
+        neigh.fit(distance_matrix_array)
 
         # Use DBSCAN for clustering
         db = DBSCAN(min_samples=5, metric='precomputed')  # Change this according to your need
-        clusters = db.fit_predict(distance_matrix)
+        clusters = db.fit_predict(distance_matrix_array)
 
         # Associate each sentence with its cluster
         sentence_clusters = {sentence: cluster for sentence, cluster in zip(sentences, clusters)}
 
         # Store sentence clusters for later use or analysis
         template_set = sentence_clusters
-        # template_set = {}
-        # for key in group_len.keys():
-        #     Tree = tupletree(
-        #         sorted_tuple_vector[key],
-        #         word_combinations[key],
-        #         word_combinations_reverse[key],
-        #         tuple_vector[key],
-        #         group_len[key],
-        #     )
-        #     root_set_detail_ID, root_set, root_set_detail = Tree.find_root(0)
-        #
-        #     root_set_detail_ID = Tree.up_split(root_set_detail_ID, root_set)
-        #     parse_result = Tree.down_split(
-        #         root_set_detail_ID, self.threshold, root_set_detail
-        #     )
-        #     template_set.update(output_result(parse_result))
         endtime = datetime.now()
         print("Parsing done...")
         print("Time taken   =   " + PINK + str(endtime - starttime) + RESET)
@@ -149,6 +108,33 @@ class LogParser:
             os.makedirs(self.savePath)
 
         self.generateresult(template_set, sentences)
+
+
+
+    def calc_dis(
+            self, data: list, fast: bool = False
+    ) -> None:
+
+
+        for i, t1 in tqdm(enumerate(data)):
+            distance4i = []
+            if fast:
+                t1_compressed = self.compressor.get_compressed_len_fast(t1)
+            else:
+                t1_compressed = self.compressor.get_compressed_len(t1)
+            for j, t2 in enumerate(data):
+                if fast:
+                    t2_compressed = self.compressor.get_compressed_len_fast(t2)
+                    t1t2_compressed = self.compressor.get_compressed_len_fast(self.agg_by_concat_space(t1, t2))
+                else:
+                    t2_compressed = self.compressor.get_compressed_len(t2)
+                    t1t2_compressed = self.compressor.get_compressed_len(self.agg_by_concat_space(t1, t2))
+                distance = self.NCD(
+                    t1_compressed, t2_compressed, t1t2_compressed
+                )
+                distance4i.append(distance)
+            self.distance_matrix.append(distance4i)
+        return self.distance_matrix
 
     def generateresult(self, template_set, sentences):
         template_ = len(sentences) * [0]
@@ -178,41 +164,6 @@ class LogParser:
             index=False,
             columns=["EventId", "EventTemplate", "Occurrences"],
         )
-
-
-
-    def calc_dis(
-            self, data: list, fast: bool = False
-    ) -> None:
-        """
-        计算“data”与其自身之间的距离，并将距离附加到 `self.distance_matrix` 中。
-
-        论据：
-            数据（列表）：用于计算之间距离的数据。
-            fast (bool): [可选] 使用`self.compressor`的_fast压缩长度函数。
-
-        Returns:
-            None: None
-        """
-
-        for i, t1 in tqdm(enumerate(data)):
-            distance4i = []
-            if fast:
-                t1_compressed = self.compressor.get_compressed_len_fast(t1)
-            else:
-                t1_compressed = self.compressor.get_compressed_len(t1)
-            for j, t2 in enumerate(data):
-                if fast:
-                    t2_compressed = self.compressor.get_compressed_len_fast(t2)
-                    t1t2_compressed = self.compressor.get_compressed_len_fast(self.agg_by_concat_space(t1, t2))
-                else:
-                    t2_compressed = self.compressor.get_compressed_len(t2)
-                    t1t2_compressed = self.compressor.get_compressed_len(self.agg_by_concat_space(t1, t2))
-                distance = self.NCD(
-                    t1_compressed, t2_compressed, t1t2_compressed
-                )
-                distance4i.append(distance)
-            self.distance_matrix.append(distance4i)
 
     #计算距离
     # def calc_dis(
