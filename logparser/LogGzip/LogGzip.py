@@ -142,10 +142,14 @@ class LogParser:
         IDnumber = 0
         df_out = []
         for k1 in template_set.keys():
-            df_out.append(["E" + str(IDnumber), k1, len(template_set[k1])])
+            occurrences = template_set[k1] if not isinstance(template_set[k1], np.ndarray) else len(template_set[k1])
+            df_out.append(["E" + str(IDnumber), k1, occurrences])
             group_accuracy = {""}
             group_accuracy.remove("")
+            if isinstance(template_set[k1], np.int64):
+                template_set[k1] = [int(template_set[k1])]
             for i in template_set[k1]:
+
                 template_[i] = " ".join(k1)
                 EventID[i] = "E" + str(IDnumber)
             IDnumber += 1
