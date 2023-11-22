@@ -72,6 +72,7 @@ class LogParser:
         self.compressor = compressor
         self.distance_matrix: list = []
         self.delimeter = delimeter
+        self.sentence_clusters = {}
 
 
     def parse(self, logName):
@@ -81,6 +82,7 @@ class LogParser:
 
         self.load_data()
 
+
         sentences = self.df_log["Content"].tolist()
 
 
@@ -88,7 +90,7 @@ class LogParser:
         distance_matrix_array = np.array(distance_matrix)
 
         # Use KNN for classification
-        neigh = NearestNeighbors(n_neighbors=3)  # Change the number of neighbors according to your need
+        neigh = NearestNeighbors(n_neighbors=4)  # Change the number of neighbors according to your need
         neigh.fit(distance_matrix_array)
 
         # Use DBSCAN for clustering
@@ -96,10 +98,10 @@ class LogParser:
         clusters = db.fit_predict(distance_matrix_array)
 
         # Associate each sentence with its cluster
-        sentence_clusters = {sentence: cluster for sentence, cluster in zip(sentences, clusters)}
+        self.sentence_clusters = {sentence: cluster for sentence, cluster in zip(sentences, clusters)}
 
         # Store sentence clusters for later use or analysis
-        template_set = sentence_clusters
+        template_set = self.sentence_clusters
         endtime = datetime.now()
         print("Parsing done...")
         print("Time taken   =   " + PINK + str(endtime - starttime) + RESET)
@@ -137,83 +139,68 @@ class LogParser:
         return self.distance_matrix
 
     def generateresult(self, template_set, sentences):
-        template_ = len(sentences) * [0]
-        EventID = len(sentences) * [0]
-        IDnumber = 0
+        # Prepare the output DataFrame
+        df_event = pd.DataFrame(columns=["EventId", "EventTemplate", "Occurrences"])
+        outliers = []
         df_out = []
-        for k1 in template_set.keys():
-            occurrences = template_set[k1] if not isinstance(template_set[k1], np.ndarray) else len(template_set[k1])
-            df_out.append(["E" + str(IDnumber), k1, occurrences])
-            group_accuracy = {""}
-            group_accuracy.remove("")
-            if isinstance(template_set[k1], np.int64):
-                template_set[k1] = [int(template_set[k1])]
-            for i in template_set[k1]:
 
-                template_[i] = " ".join(k1)
-                EventID[i] = "E" + str(IDnumber)
-            IDnumber += 1
+        for cluster in set(self.sentence_clusters.values()):
+            if cluster != -1:
+                # Get all the sentences in this cluster
+                self.clustered_sentences = [sentence for sentence, assigned_cluster in self.sentence_clusters.items() if
+                                            assigned_cluster == cluster]
 
-        self.df_log["EventId"] = EventID
-        self.df_log["EventTemplate"] = template_
+                # Make template string by finding most common elements in each position in the sentence
+                word_positions = defaultdict(Counter)
+                for sentence in self.clustered_sentences:
+                    for i, word in enumerate(sentence.split()):
+                        word_positions[i].update([word])
+
+                # Generate template by choosing most frequent words
+                template = ' '.join([word_counts.most_common(1)[0][0] for word_counts in word_positions.values()])
+                occurrences = len(self.clustered_sentences)
+
+                # Create 'EventId' for the cluster
+                event_id = f'E{cluster}'
+                df_event = pd.DataFrame(
+                    [[event_id, template, occurrences]], columns=["EventId", "EventTemplate", "Occurrences"]
+                )
+
+                # Assign 'EventId' to sentences in the cluster
+                for sentence in self.clustered_sentences:
+                    self.sentence_clusters[sentence] = event_id
+
+            else:
+                outliers.append("E" + str(cluster))
+
+        # Process outliers
+        if 'EventId' in self.df_log:
+            df_outlier = self.df_log[self.df_log['EventId'].isin(outliers)]
+        else:
+            print("Column 'EventId' does not exist in df_log")
+
+        df_outlier = self.df_log[self.df_log['EventId'].isin(outliers)]
+        df_outlier.to_csv(os.path.join(self.savePath, self.logName + "_outliers.csv"), index=False)
+
+        # Save EventId, EventTemplate, and Occurrences to a csv file
+        df_event.to_csv(
+            os.path.join(self.savePath, self.logName + "_templates.csv"),
+            index=False,
+        )
+
+        # Generate a structured log CSV with the EventId associated with each log
+        print(
+            f"{len(df_event)} clusters have been detected and recorded to {os.path.join(self.savePath, self.logName + '_structure.csv')}")
+        self.df_log["EventId"] = [self.sentence_clusters[sentence] for sentence in sentences]
+        self.df_log["EventTemplate"] = [
+            df_event[df_event['EventId'] == self.sentence_clusters[sentence]]['EventTemplate'].values[0] if
+            not df_event[df_event['EventId'] == self.sentence_clusters[sentence]].empty else 'No template'
+            for sentence in sentences]
         self.df_log.to_csv(
             os.path.join(self.savePath, self.logName + "_structured.csv"), index=False
         )
 
-        df_event = pd.DataFrame(
-            df_out, columns=["EventId", "EventTemplate", "Occurrences"]
-        )
-        df_event.to_csv(
-            os.path.join(self.savePath, self.logName + "_templates.csv"),
-            index=False,
-            columns=["EventId", "EventTemplate", "Occurrences"],
-        )
-
-    #计算距离
-    # def calc_dis(
-    #     self, data: list, train_data: Optional[list] = None, fast: bool = False
-    # ) -> None:
-    #     """
-    #     计算“data”与其自身或“data”与“data”之间的距离
-    #      `train_data` 并将距离附加到 `self.distance_matrix` 中。
-    #
-    #      论据：
-    #          数据（列表）：用于计算之间距离的数据。
-    #          train_data（列表）：[可选] 训练数据以计算与“data”的距离。
-    #          fast (bool): [可选] 使用`self.compressor`的_fast压缩长度函数。
-    #
-    #     Returns:
-    #         None: None
-    #     """
-    #
-    #     data_to_compare = data
-    #     if train_data is not None:
-    #         data_to_compare = train_data
-    #
-    #     for i, t1 in tqdm(enumerate(data)):
-    #         distance4i = []
-    #         if fast:
-    #             t1_compressed = self.compressor.get_compressed_len_fast(t1)
-    #         else:
-    #             t1_compressed = self.compressor.get_compressed_len(t1)
-    #         for j, t2 in enumerate(data_to_compare):
-    #             if fast:
-    #                 t2_compressed = self.compressor.get_compressed_len_fast(t2)
-    #                 t1t2_compressed = self.compressor.get_compressed_len_fast(
-    #                     self.aggregation_func(t1, t2)
-    #                 )
-    #             else:
-    #                 t2_compressed = self.compressor.get_compressed_len(t2)
-    #                 t1t2_compressed = self.compressor.get_compressed_len(
-    #                     self.aggregation_func(t1, t2)
-    #                 )
-    #             distance = self.distance_func(
-    #                 t1_compressed, t2_compressed, t1t2_compressed
-    #             )
-    #             distance4i.append(distance)
-    #         self.distance_matrix.append(distance4i)
-
-#这是一个预处理方法，接收一个参数line。方法通过遍历self.rex并对line进行预处理，将每个找到的模式替换为"<*>"。处理完成后的line作为结果返回。
+    #这是一个预处理方法，接收一个参数line。方法通过遍历self.rex并对line进行预处理，将每个找到的模式替换为"<*>"。处理完成后的line作为结果返回。
     def preprocess(self, line):
         for currentRex in self.rex:
             line = re.sub(currentRex, "<*>", line)
@@ -226,6 +213,8 @@ class LogParser:
         self.df_log = self.log_to_dataframe(
             os.path.join(self.path, self.logName), regex, headers, self.logformat
         )
+        self.df_log["EventId"] = -1
+
 
     #接收一个logformat（日志格式）作为参数，返回一个用于分割日志信息的正则表达式以及相应的标题列表。函数通过拆分logformat参数并构建正则表达式模式完成此任务。
     def generate_logformat_regex(self, logformat):
@@ -262,31 +251,6 @@ class LogParser:
         logdf.insert(0, "LineId", None)
         logdf["LineId"] = [i + 1 for i in range(linecount)]
         return logdf
-
-# def output_result(parse_result):
-#     template_set = {}
-#     for key in parse_result.keys():
-#         for pr in parse_result[key]:
-#             sort = sorted(pr, key=lambda tup: tup[2])
-#             i = 1
-#             template = []
-#             while i < len(sort):
-#                 this = sort[i][1]
-#                 if bool("<*>" in this):
-#                     template.append("<*>")
-#                     i += 1
-#                     continue
-#                 if exclude_digits(this):
-#                     template.append("<*>")
-#                     i += 1
-#                     continue
-#                 template.append(sort[i][1])
-#                 i += 1
-#             template = tuple(template)
-#             template_set.setdefault(template, []).append(pr[len(pr) - 1][0])
-#     return template_set
-
-
 def save_result(dataset, df_output, template_set):
     df_output.to_csv("Parseresult/" + dataset + "result.csv", index=False)
     with open("Parseresult/" + dataset + "_template.csv", "w") as f:
@@ -295,17 +259,4 @@ def save_result(dataset, df_output, template_set):
             f.write("  " + str(len(template_set[k1])))
             f.write("\n")
         f.close()
-
-# #用来检查一个字符串中的数字占比是否大于或等于 30%。
-# def exclude_digits(string):
-#     """
-#     exclude the digits-domain words from partial constant
-#     """
-#     pattern = r"\d"
-#     digits = re.findall(pattern, string)
-#     if len(digits) == 0:
-#         return False
-#     return len(digits) / len(string) >= 0.3
-
-
 
