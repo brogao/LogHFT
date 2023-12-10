@@ -74,7 +74,6 @@ class LogParser:
         self.delimeter = delimeter
         self.sentence_clusters = {}
 
-
     def parse(self, logName):
         print("Parsing file: " + os.path.join(self.path, logName))
         starttime = datetime.now()
@@ -82,23 +81,30 @@ class LogParser:
 
         self.load_data()
 
-
         sentences = self.df_log["Content"].tolist()
 
+        # Classify based on message length
+        length_clusters = self.classify_by_length(sentences)
 
-        distance_matrix = self.calc_dis(sentences)
-        distance_matrix_array = np.array(distance_matrix)
+        # Perform clustering for each length cluster using compressed distances and KNN
+        for length_cluster, sentences_in_length_cluster in length_clusters.items():
+            print(f"Clustering for length {length_cluster}...")
 
-        # Use KNN for classification
-        neigh = NearestNeighbors(n_neighbors=4)  # Change the number of neighbors according to your need
-        neigh.fit(distance_matrix_array)
+            # Calculate distance matrix for sentences in the current length cluster
+            distance_matrix = self.calc_dis(sentences_in_length_cluster)
+            distance_matrix_array = np.array(distance_matrix)
 
-        # Use DBSCAN for clustering
-        db = DBSCAN(min_samples=5, metric='precomputed')  # Change this according to your need
-        clusters = db.fit_predict(distance_matrix_array)
+            # Use KNN for classification
+            neigh = NearestNeighbors(n_neighbors=4)  # Change the number of neighbors according to your need
+            neigh.fit(distance_matrix_array)
 
-        # Associate each sentence with its cluster
-        self.sentence_clusters = {sentence: cluster for sentence, cluster in zip(sentences, clusters)}
+            # Use DBSCAN for clustering
+            db = DBSCAN(eps=0.1, min_samples=5, metric='precomputed')  # Change this according to your need
+            clusters = db.fit_predict(distance_matrix_array)
+
+            # Associate each sentence in the current length cluster with its cluster
+            for sentence, cluster in zip(sentences_in_length_cluster, clusters):
+                self.sentence_clusters[sentence] = f"{length_cluster}_{cluster}"
 
         # Store sentence clusters for later use or analysis
         template_set = self.sentence_clusters
@@ -111,32 +117,29 @@ class LogParser:
 
         self.generateresult(template_set, sentences)
 
+    def classify_by_length(self, sentences):
+        length_clusters = defaultdict(list)
 
+        # Classify sentences into length clusters
+        for sentence in sentences:
+            length = len(sentence)
+            length_clusters[length].append(sentence)
 
-    def calc_dis(
-            self, data: list, fast: bool = False
-    ) -> None:
+        return length_clusters
 
+    def calc_dis(self, data: list) -> np.ndarray:
+        num_sentences = len(data)
+        distance_matrix = np.zeros((num_sentences, num_sentences))
 
         for i, t1 in tqdm(enumerate(data)):
-            distance4i = []
-            if fast:
-                t1_compressed = self.compressor.get_compressed_len_fast(t1)
-            else:
-                t1_compressed = self.compressor.get_compressed_len(t1)
+            t1_compressed = self.compressor.get_compressed_len(t1)
             for j, t2 in enumerate(data):
-                if fast:
-                    t2_compressed = self.compressor.get_compressed_len_fast(t2)
-                    t1t2_compressed = self.compressor.get_compressed_len_fast(self.agg_by_concat_space(t1, t2))
-                else:
-                    t2_compressed = self.compressor.get_compressed_len(t2)
-                    t1t2_compressed = self.compressor.get_compressed_len(self.agg_by_concat_space(t1, t2))
-                distance = self.NCD(
-                    t1_compressed, t2_compressed, t1t2_compressed
-                )
-                distance4i.append(distance)
-            self.distance_matrix.append(distance4i)
-        return self.distance_matrix
+                t2_compressed = self.compressor.get_compressed_len(t2)
+                t1t2_compressed = self.compressor.get_compressed_len(self.agg_by_concat_space(t1, t2))
+                distance = self.NCD(t1_compressed, t2_compressed, t1t2_compressed)
+                distance_matrix[i, j] = distance
+
+        return distance_matrix
 
     def generateresult(self, template_set, sentences):
         # Prepare the output DataFrame
@@ -149,30 +152,24 @@ class LogParser:
                 # Get all the sentences in this cluster
                 self.clustered_sentences = [sentence for sentence, assigned_cluster in self.sentence_clusters.items() if
                                             assigned_cluster == cluster]
-
                 # Make template string by finding most common elements in each position in the sentence
                 word_positions = defaultdict(Counter)
                 for sentence in self.clustered_sentences:
                     for i, word in enumerate(sentence.split()):
                         word_positions[i].update([word])
-
                 # Generate template by choosing most frequent words
                 template = ' '.join([word_counts.most_common(1)[0][0] for word_counts in word_positions.values()])
                 occurrences = len(self.clustered_sentences)
-
                 # Create 'EventId' for the cluster
                 event_id = f'E{cluster}'
                 df_event = pd.DataFrame(
                     [[event_id, template, occurrences]], columns=["EventId", "EventTemplate", "Occurrences"]
                 )
-
                 # Assign 'EventId' to sentences in the cluster
                 for sentence in self.clustered_sentences:
                     self.sentence_clusters[sentence] = event_id
-
             else:
                 outliers.append("E" + str(cluster))
-
         # Process outliers
         if 'EventId' in self.df_log:
             df_outlier = self.df_log[self.df_log['EventId'].isin(outliers)]
@@ -187,7 +184,6 @@ class LogParser:
             os.path.join(self.savePath, self.logName + "_templates.csv"),
             index=False,
         )
-
         # Generate a structured log CSV with the EventId associated with each log
         print(
             f"{len(df_event)} clusters have been detected and recorded to {os.path.join(self.savePath, self.logName + '_structure.csv')}")
@@ -218,13 +214,15 @@ class LogParser:
 
     #接收一个logformat（日志格式）作为参数，返回一个用于分割日志信息的正则表达式以及相应的标题列表。函数通过拆分logformat参数并构建正则表达式模式完成此任务。
     def generate_logformat_regex(self, logformat):
-        """Function to generate regular expression to split log messages"""
+        """
+        Function to generate regular expression to split log messages
+        """
         headers = []
         splitters = re.split(r"(<[^<>]+>)", logformat)
         regex = ""
         for k in range(len(splitters)):
             if k % 2 == 0:
-                splitter = re.sub(" +", "\\\s+", splitters[k])
+                splitter = re.sub(" +", "\\\\s+", splitters[k])
                 regex += splitter
             else:
                 header = splitters[k].strip("<").strip(">")
