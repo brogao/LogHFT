@@ -20,7 +20,7 @@ from logparser.LenMa import LogParser
 from logparser.utils import evaluator
 import os
 import pandas as pd
-
+from  logparser.LenMa.compressors import DefaultCompressor
 
 input_dir = "../../data/loghub_2k/"  # The input directory of log file
 output_dir = "Lenma_result/"  # The output directory of parsing results
@@ -143,13 +143,15 @@ for dataset, setting in benchmark_settings.items():
     print("\n=== Evaluation on %s ===" % dataset)
     indir = os.path.join(input_dir, os.path.dirname(setting["log_file"]))
     log_file = os.path.basename(setting["log_file"])
-
+    # 实例化DefaultCompressor，假设使用gzip压缩
+    compressor = DefaultCompressor("gzip")
     parser = LogParser(
         log_format=setting["log_format"],
         indir=indir,
         outdir=output_dir,
         rex=setting["regex"],
         threshold=setting["threshold"],
+        compressor_instance=compressor
     )
     parser.parse(log_file)
 
@@ -164,3 +166,8 @@ df_result = pd.DataFrame(bechmark_result, columns=["Dataset", "F1_measure", "Acc
 df_result.set_index("Dataset", inplace=True)
 print(df_result)
 df_result.to_csv("Lenma_bechmark_result.csv", float_format="%.6f")
+# Calculate average values of F1_measure and Accuracy
+average_f1 = df_result["F1_measure"].mean()
+average_accuracy = df_result["Accuracy"].mean()
+# Add a new row with averages to the DataFrame
+df_result.loc["Average"] = [average_f1, average_accuracy]
