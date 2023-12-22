@@ -1,19 +1,3 @@
-# =========================================================================
-# Copyright (C) 2016-2023 LOGPAI (https://github.com/logpai).
-# Copyright (C) 2023 gaiusyu
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# =========================================================================
 
 from datetime import datetime
 from collections import Counter
@@ -86,36 +70,28 @@ class LogParser:
         # Classify based on message length
         length_clusters = self.classify_by_length(sentences)
 
-        # Perform clustering for each length cluster using compressed distances and KNN
-        for length_cluster, sentences_in_length_cluster in length_clusters.items():
-            print(f"Clustering for length {length_cluster}...")
+        # Perform clustering for each length cluster using compressed distances and DBSCAN
+        for length, sentences_in_length_cluster in length_clusters.items():
+            print(f"Clustering for length {length}...")
 
-            # Calculate distance matrix for sentences in the current length cluster
-            distance_matrix = self.calc_dis(sentences_in_length_cluster)
-            distance_matrix_array = np.array(distance_matrix)
+            if len(sentences_in_length_cluster) > 1:  # Ensure there are at least 2 sentences to compare
+                # Calculate distance matrix for sentences in the current length cluster
+                distance_matrix = self.calc_dis(sentences_in_length_cluster)
+                distance_matrix_array = np.array(distance_matrix)
 
-            # Use KNN for classification
-            neigh = NearestNeighbors(n_neighbors=4)  # Change the number of neighbors according to your need
-            neigh.fit(distance_matrix_array)
+                # Use DBSCAN for clustering based on the distance matrix
+                db = DBSCAN(eps=0.1, min_samples=2, metric='precomputed')
+                clusters = db.fit_predict(distance_matrix_array)
 
-            # Use DBSCAN for clustering
-            db = DBSCAN(eps=0.1, min_samples=5, metric='precomputed')  # Change this according to your need
-            clusters = db.fit_predict(distance_matrix_array)
+                # Assign each sentence in the current length cluster with its cluster ID
+                for sentence, cluster_id in zip(sentences_in_length_cluster, clusters):
+                    self.sentence_clusters[sentence] = f"{length}_{cluster_id}"
+            else:
+                # If only one sentence in this length cluster, it forms a cluster by itself.
+                self.sentence_clusters[sentences_in_length_cluster[0]] = f"{length}_0"
 
-            # Associate each sentence in the current length cluster with its cluster
-            for sentence, cluster in zip(sentences_in_length_cluster, clusters):
-                self.sentence_clusters[sentence] = f"{length_cluster}_{cluster}"
-
-        # Store sentence clusters for later use or analysis
-        template_set = self.sentence_clusters
-        endtime = datetime.now()
-        print("Parsing done...")
-        print("Time taken   =   " + PINK + str(endtime - starttime) + RESET)
-
-        if not os.path.exists(self.savePath):
-            os.makedirs(self.savePath)
-
-        self.generateresult(template_set, sentences)
+        # Generate the results
+        self.generateresult(sentences)
 
     def classify_by_length(self, sentences):
         length_clusters = defaultdict(list)
@@ -141,60 +117,55 @@ class LogParser:
 
         return distance_matrix
 
-    def generateresult(self, template_set, sentences):
-        # Prepare the output DataFrame
+    def get_template(self, preprocessed_sentences):
+        # Initialize a Counter for each word position in the sentences
+        word_positions = defaultdict(Counter)
+        for sentence in preprocessed_sentences:
+            words = sentence.split()
+            for i, word in enumerate(words):
+                word_positions[i].update([word])
+
+        # Generate template by choosing the most common word at each position
+        template = " ".join(word_counts.most_common(1)[0][0] for word_counts in word_positions.values())
+        return template
+
+    def generateresult(self, sentences):
+        # Initialize the DataFrame to hold the template results
         df_event = pd.DataFrame(columns=["EventId", "EventTemplate", "Occurrences"])
-        outliers = []
-        df_out = []
 
-        for cluster in set(self.sentence_clusters.values()):
-            if cluster != -1:
-                # Get all the sentences in this cluster
-                self.clustered_sentences = [sentence for sentence, assigned_cluster in self.sentence_clusters.items() if
-                                            assigned_cluster == cluster]
-                # Make template string by finding most common elements in each position in the sentence
-                word_positions = defaultdict(Counter)
-                for sentence in self.clustered_sentences:
-                    for i, word in enumerate(sentence.split()):
-                        word_positions[i].update([word])
-                # Generate template by choosing most frequent words
-                template = ' '.join([word_counts.most_common(1)[0][0] for word_counts in word_positions.values()])
-                occurrences = len(self.clustered_sentences)
-                # Create 'EventId' for the cluster
-                event_id = f'E{cluster}'
-                df_event = pd.DataFrame(
-                    [[event_id, template, occurrences]], columns=["EventId", "EventTemplate", "Occurrences"]
-                )
-                # Assign 'EventId' to sentences in the cluster
-                for sentence in self.clustered_sentences:
-                    self.sentence_clusters[sentence] = event_id
-            else:
-                outliers.append("E" + str(cluster))
-        # Process outliers
-        if 'EventId' in self.df_log:
-            df_outlier = self.df_log[self.df_log['EventId'].isin(outliers)]
-        else:
-            print("Column 'EventId' does not exist in df_log")
+        # Generate templates based on clusters
+        for event_id, cluster_sentences in self.sentence_clusters.items():
+            if cluster_sentences:
+                # Preprocess sentences to generalize them
+                preprocessed_sentences = [self.preprocess(sentence) for sentence in cluster_sentences]
 
-        df_outlier = self.df_log[self.df_log['EventId'].isin(outliers)]
-        df_outlier.to_csv(os.path.join(self.savePath, self.logName + "_outliers.csv"), index=False)
+                # Extract template
+                template = self.get_template(preprocessed_sentences)
+                occurrences = len(cluster_sentences)
 
-        # Save EventId, EventTemplate, and Occurrences to a csv file
-        df_event.to_csv(
-            os.path.join(self.savePath, self.logName + "_templates.csv"),
-            index=False,
-        )
-        # Generate a structured log CSV with the EventId associated with each log
-        print(
-            f"{len(df_event)} clusters have been detected and recorded to {os.path.join(self.savePath, self.logName + '_structure.csv')}")
-        self.df_log["EventId"] = [self.sentence_clusters[sentence] for sentence in sentences]
-        self.df_log["EventTemplate"] = [
-            df_event[df_event['EventId'] == self.sentence_clusters[sentence]]['EventTemplate'].values[0] if
-            not df_event[df_event['EventId'] == self.sentence_clusters[sentence]].empty else 'No template'
-            for sentence in sentences]
-        self.df_log.to_csv(
-            os.path.join(self.savePath, self.logName + "_structured.csv"), index=False
-        )
+                # Create a new DataFrame row
+                new_row = pd.DataFrame([[event_id, template, occurrences]],
+                                       columns=["EventId", "EventTemplate", "Occurrences"])
+
+                # Add new row to the DataFrame
+                df_event = pd.concat([df_event, new_row], ignore_index=True)
+
+        # Ensure EventId columns are of the same data type
+        self.df_log['EventId'] = self.df_log['EventId'].astype(str)
+        df_event['EventId'] = df_event['EventId'].astype(str)
+
+        # Add 'EventId' and 'EventTemplate' to the log dataframe
+        self.df_log = self.df_log.merge(df_event, on="EventId", how="left")
+
+        # Fill NaNs with "No template" for rows that didn't find a match in df_event
+        self.df_log["EventTemplate"].fillna("No template", inplace=True)
+
+        # Save the final DataFrame to a CSV file
+        self.df_log.to_csv(os.path.join(self.savePath, self.logName + "_structured.csv"), index=False)
+
+        # Print summary
+        print(f"Total clusters: {len(df_event)}")
+        print(f"Result saved to: {self.savePath}")
 
     #这是一个预处理方法，接收一个参数line。方法通过遍历self.rex并对line进行预处理，将每个找到的模式替换为"<*>"。处理完成后的line作为结果返回。
     def preprocess(self, line):
