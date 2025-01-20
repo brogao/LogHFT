@@ -6,7 +6,7 @@ from sklearn.metrics import accuracy_score
 import regex as re
 import sys
 
-
+# 定义辅助函数
 def post_process_tokens(tokens, punc):
     excluded_str = ['=', '|', '(', ')']
     for i in range(len(tokens)):
@@ -92,21 +92,30 @@ def calculate_parsing_accuracy(groundtruth_df, parsedresult_df, filter_templates
     print('Parsing_Accuracy (PA): {:.4f}'.format(PA))
     return PA
 
-# def calculate_parsing_accuracy_lstm(groundtruth_df, parsedresult_df, filter_templates=None):
-#     if filter_templates is not None:
-#         groundtruth_df = groundtruth_df[groundtruth_df['EventTemplate'].isin(filter_templates)]
-#         parsedresult_df = parsedresult_df.loc[groundtruth_df.index]
-#     # correctly_parsed_messages = parsedresult_df[['EventTemplate']].eq(groundtruth_df[['EventTemplate']]).values.sum()
-#     groundtruth_templates = list(groundtruth_df['EventTemplate'])
-#     parsedresult_templates = list(parsedresult_df['EventTemplate'])
-#     correctly_parsed_messages = 0
-#     for i in range(len(groundtruth_templates)):
-#         if correct_lstm(groundtruth_templates[i], parsedresult_templates[i]):
-#             correctly_parsed_messages += 1
-#
-#     PA = float(correctly_parsed_messages) / len(groundtruth_templates)
-#     print('Parsing_Accuracy (PA): {:.4f}'.format(PA))
-#     return PA
+def calculate_parsing_accuracy_lstm(groundtruth_df, parsedresult_df, filter_templates=None):
+
+    # parsedresult_df = pd.read_csv(parsedresult)
+    # groundtruth_df = pd.read_csv(groundtruth)
+    if filter_templates is not None:
+        groundtruth_df = groundtruth_df[groundtruth_df['EventTemplate'].isin(filter_templates)]
+        parsedresult_df = parsedresult_df.loc[groundtruth_df.index]
+    # correctly_parsed_messages = parsedresult_df[['EventTemplate']].eq(groundtruth_df[['EventTemplate']]).values.sum()
+    groundtruth_templates = list(groundtruth_df['EventTemplate'])
+    parsedresult_templates = list(parsedresult_df['EventTemplate'])
+    correctly_parsed_messages = 0
+    for i in range(len(groundtruth_templates)):
+        if correct_lstm(groundtruth_templates[i], parsedresult_templates[i]):
+            correctly_parsed_messages += 1
+
+    PA = float(correctly_parsed_messages) / len(groundtruth_templates)
+
+    # similarities = []
+    # for index in range(len(groundtruth_df)):
+    #     similarities.append(calculate_similarity(groundtruth_df['EventTemplate'][index], parsedresult_df['EventTemplate'][index]))
+    # SA = sum(similarities) / len(similarities)
+    # print('Parsing_Accuracy (PA): {:.4f}, Similarity_Accuracy (SA): {:.4f}'.format(PA, SA))
+    print('Parsing_Accuracy (PA): {:.4f}'.format(PA))
+    return PA
 
 def evaluate(groundtruth, parsedresult):
     df_groundtruth = pd.read_csv(groundtruth)
@@ -116,23 +125,25 @@ def evaluate(groundtruth, parsedresult):
     df_groundtruth = df_groundtruth.loc[non_empty_log_ids]
     df_parsedlog = df_parsedlog.loc[non_empty_log_ids]
 
-
+    # 调用 get_accuracy 获取 GA 和 FGA
     GA, FGA = get_accuracy(df_groundtruth["EventTemplate"], df_parsedlog["EventTemplate"])
 
     accuracy_exact_string_matching = accuracy_score(
         np.array(df_groundtruth.EventTemplate.values, dtype='str'),
         np.array(df_parsedlog.EventTemplate.values, dtype='str')
     )
-    # PA = calculate_parsing_accuracy_lstm(df_groundtruth, df_parsedlog)
+    PA = calculate_parsing_accuracy_lstm(df_groundtruth, df_parsedlog)
 
+    # 调用 evaluate_template_level 获取 FTA, PTA 和 RTA
     _, _, FTA, PTA, RTA = evaluate_template_level(None, df_groundtruth, df_parsedlog)
 
+    # 打印所有的评估指标
     print(
-        "Grouping_Accuracy (GA): {:.4f},  FGA: {:.4f}, FTA: {:.4f}, PTA: {:.4f}, RTA: {:.4f}".format(
-            GA, FGA, FTA, PTA, RTA
+        "Grouping_Accuracy (GA): {:.4f}, PA: {:.4f}, FGA: {:.4f}, PTA: {:.4f}, RTA: {:.4f}, FTA: {:.4f}".format(
+            GA, PA, FGA, PTA, RTA, FTA
         )
     )
-    return GA, FGA, FTA, PTA, RTA
+    return GA, PA, FGA, FTA, PTA, RTA
 
 def get_accuracy(series_groundtruth, series_parsedlog, filter_templates=None):
     series_groundtruth_valuecounts = series_groundtruth.value_counts()
